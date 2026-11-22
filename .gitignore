@@ -1,0 +1,9 @@
+.github/
+.vscode/
+*.log
+
+# HRTF datasets
+assets/hrtf/
+
+# Build output
+build/
