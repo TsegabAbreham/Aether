@@ -67,6 +67,13 @@ target_sources(Aether PRIVATE
     src/SplashScreen/SplashScreen.cpp
     src/SplashScreen/SplashScreenWindow.cpp
     src/SplashScreen/SplashScreenWindow.h
+
+    src/Windows/Window.cpp
+    src/Windows/Window.h
+    src/Windows/WindowManager.cpp
+    src/Windows/Settings/Setting.cpp
+    src/Windows/Settings/SettingsManager.cpp
+
 )
 
 target_compile_definitions(Aether PRIVATE

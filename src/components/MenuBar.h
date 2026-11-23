@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 
 #include "Workspace/Workspace.h"
+#include "../Windows/WindowManager.h"
 
 //==============================================================================
 namespace Theme
@@ -178,7 +179,9 @@ public:
             menu.addSeparator();
             addMenuItem(menu, 3, "Save",           "Ctrl+S");
             menu.addSeparator();
-            addMenuItem(menu, 4, "Exit",           "Alt+F4");
+            addMenuItem(menu, 4, "Settings",    "Ctrl+Alt+S");
+            menu.addSeparator();
+            addMenuItem(menu, 5, "Exit",           "Alt+F4");
         }
         else if (menuName == "Edit")
         {
@@ -205,9 +208,15 @@ public:
     {
         switch (menuItemID)
         {
+            // File
             case 2: openFolder(); break;
-            case 4: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
-        
+            case 4: windowManager.openSettings(); break;
+            case 5: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
+            
+            // View
+
+            // Help
+
             default: break;
         }
     }
@@ -242,4 +251,7 @@ private:
                     onFolderSelected(folder);
             });
     }
+
+    WindowManager windowManager; 
+
 };

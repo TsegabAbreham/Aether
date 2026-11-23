@@ -7,3 +7,6 @@ assets/hrtf/
 
 # Build output
 build/
+
+# Release Setup
+release/
