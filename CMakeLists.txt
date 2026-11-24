@@ -6,6 +6,10 @@ project(Aether VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# JSON library
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+set(JSON_Install OFF CACHE INTERNAL "")
+
 add_subdirectory(JUCE)
 add_subdirectory(external/glm)
 
@@ -40,9 +44,12 @@ target_sources(Aether PRIVATE
     src/MainComponent.cpp
     src/MainComponent.h
 
+    external/json/json.hpp
+
     src/components/knob.cpp
     src/components/knob.h
-    src/components/MenuBar.h
+
+    src/components/MenuBar/MenuBar.h
 
     src/components/Helper_functions/obj_loader.cpp
 
@@ -52,6 +59,7 @@ target_sources(Aether PRIVATE
     src/components/Workspace/Panels/Inspector.cpp
     src/components/Workspace/Panels/FileExplorer.cpp
     src/components/Workspace/Panels/Hierarchy.cpp
+    src/components/Workspace/Panels/AnimationSequencer.cpp
     src/components/Workspace/Panels/Panel.cpp
 
     src/Audio/Core/AudioEngine.cpp

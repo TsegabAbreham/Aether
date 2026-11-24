@@ -3,7 +3,7 @@
 #include <JuceHeader.h>
 
 #include "components/knob.h"
-#include "components/MenuBar.h"
+#include "components/Menubar/MenuBar.h"
 
 #include "components/Workspace/Workspace.h"
 

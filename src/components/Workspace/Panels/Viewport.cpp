@@ -708,7 +708,6 @@ void ViewportPanel::focusSelectedObject()
     openGLContext.triggerRepaint();
 }
 
-
 //==============================================================
 // OPENGL RENDER
 //==============================================================

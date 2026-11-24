@@ -1,8 +1,8 @@
 #pragma once
 #include <JuceHeader.h>
 
-#include "Workspace/Workspace.h"
-#include "../Windows/WindowManager.h"
+#include "../Workspace/Workspace.h"
+#include "../../Windows/WindowManager.h"
 
 //==============================================================================
 namespace Theme
@@ -211,6 +211,58 @@ public:
         {
             // File
             case 2: openFolder(); break;
+            /*
+            case 3:
+            {
+                juce::AlertWindow::showOkCancelBox(
+                    juce::MessageBoxIconType::QuestionIcon,
+                    "Save Project?",
+                    "Do you want to save your project?",
+                    "Save",
+                    "Cancel",
+                    nullptr,
+                    juce::ModalCallbackFunction::create(
+                        [this](int result)
+                        {
+                            if (result != 1)
+                                return;
+
+                            auto chooser = std::make_shared<juce::FileChooser>(
+                                "Save Aether Project",
+                                juce::File::getSpecialLocation(
+                                    juce::File::userDocumentsDirectory)
+                                    .getChildFile("Untitled.atr"),
+                                "*.atr"
+                            );
+
+                            chooser->launchAsync(
+                                juce::FileBrowserComponent::saveMode |
+                                juce::FileBrowserComponent::canSelectFiles,
+                                [this, chooser](const juce::FileChooser& fc)
+                                {
+                                    auto projectFile = fc.getResult();
+
+                                    if (projectFile == juce::File())
+                                        return;
+
+                                    if (!projectFile.hasFileExtension("atr"))
+                                        projectFile = projectFile.withFileExtension("atr");
+
+                                    ProjectManager projectManager;
+
+                                    if (projectManager.saveProject(projectFile))
+                                        DBG("Project saved successfully!");
+                                    else
+                                        DBG("Failed to save project!");
+                                }
+                            );
+                        }
+                    )
+                );
+
+                break;
+            }
+            */
             case 4:
                 windowManager.openSettings (onAudioDeviceManagerRequested
                                                 ? onAudioDeviceManagerRequested()

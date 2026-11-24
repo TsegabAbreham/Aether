@@ -75,6 +75,7 @@ public:
     juce::ChangeBroadcaster listBroadcaster;        // objects added / removed / renamed / moved to another track
     juce::ChangeBroadcaster selectionBroadcaster;   // selected object changed
     juce::ChangeBroadcaster transformBroadcaster;   // selected object's position / rotation changed
+    juce::ChangeBroadcaster viewBroadcaster;        // horizontal zoom or scroll changed
 
     std::function<void(const AudioObject&)> onObjectChanged;      // ANY property of an object changed
     std::function<void(const AudioObject&)> onTransformChanged;   // position or rotation changed
@@ -87,7 +88,14 @@ public:
         for (auto* b : { &toStartButton, &playButton, &stopButton, &addTrackButton })
             addAndMakeVisible(b);
 
-        toStartButton.onClick  = [this] { setPlayheadSeconds(0.0); viewStart = 0.0; updateScrollBars(); repaint(); };
+        toStartButton.onClick  = [this]
+        {
+            setPlayheadSeconds (0.0);
+            viewStart = 0.0;
+            updateScrollBars();
+            repaint();
+            viewBroadcaster.sendChangeMessage();
+        };
         playButton.onClick     = [this] { togglePlay(); };
         stopButton.onClick     = [this] { stop(); };
         addTrackButton.onClick = [this] { addTrack(); };
@@ -175,6 +183,7 @@ public:
         notifyListChanged();
         updateScrollBars();
         repaint();
+        viewBroadcaster.sendChangeMessage();
         return true;
     }
 
@@ -212,6 +221,7 @@ public:
         viewStart = 0.0;
         updateScrollBars();
         repaint();
+        viewBroadcaster.sendChangeMessage();
     }
 
     void setPlayheadSeconds(double seconds)
@@ -221,6 +231,27 @@ public:
     }
 
     double getPlayheadSeconds() const     { return (double) playSample.load() / deviceSR.load(); }
+
+    static int getHeaderWidth() { return headerW; }
+    double getPixelsPerSecond() const { return pps; }
+    double getViewStart() const { return viewStart; }
+
+    void setView (double startSeconds, double pixelsPerSecond)
+    {
+        pps = juce::jlimit (10.0, 400.0, pixelsPerSecond);
+        viewStart = juce::jmax (0.0, startSeconds);
+        zoomSlider.setValue (pps, juce::dontSendNotification);
+        updateScrollBars();
+        repaint();
+        viewBroadcaster.sendChangeMessage();
+    }
+
+    void setAnimationEnd (double endSeconds)
+    {
+        const double clampedEnd = juce::jmax (0.0, endSeconds);
+        if (animationEndSeconds.exchange (clampedEnd) != clampedEnd)
+            updateScrollBars();
+    }
 
     // global amount of distance-based room reverb: 0 = off, 1 = default, up to 2 = very wet
     void setRoomAmount(float amount)      { roomAmount.store(juce::jlimit(0.0f, 2.0f, amount)); }
@@ -683,6 +714,9 @@ public:
                     }
                 }
 
+                maxEnd = juce::jmax (maxEnd,
+                                     (juce::int64) std::llround (
+                                         animationEndSeconds.load() * sr));
                 info.buffer->applyGain(info.startSample, n, masterGain.load());
             }
         }
@@ -855,6 +889,7 @@ public:
         clampView();
         updateScrollBars();
         repaint();
+        viewBroadcaster.sendChangeMessage();
     }
 
     bool keyPressed(const juce::KeyPress& key) override
@@ -1085,7 +1120,7 @@ private:
 
     double getProjectEnd() const
     {
-        double e = 0.0;
+        double e = animationEndSeconds.load();
         for (auto& t : tracks)
             for (auto& c : t->clips)
                 e = juce::jmax(e, c->startSec + c->lengthSec);
@@ -1114,7 +1149,11 @@ private:
 
     void scrollBarMoved(juce::ScrollBar* sb, double newStart) override
     {
-        if (sb == &hBar) viewStart = newStart;
+        if (sb == &hBar)
+        {
+            viewStart = newStart;
+            viewBroadcaster.sendChangeMessage();
+        }
         else             scrollY   = (int) newStart;
 
         repaint();
@@ -1480,6 +1519,7 @@ private:
                 viewStart = juce::jmax(0.0, t - vis * 0.1);
                 updateScrollBars();
                 repaint();
+                viewBroadcaster.sendChangeMessage();
                 lastPaintedTime = t;
                 return;
             }
@@ -1775,6 +1815,7 @@ private:
 
     double pps       = 60.0;     // pixels per second
     double viewStart = 0.0;      // seconds at the left edge of the lanes
+    std::atomic<double> animationEndSeconds { 0.0 };
     int    scrollY   = 0;
 
     DragMode dragMode = DragMode::none;

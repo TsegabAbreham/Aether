@@ -5,6 +5,7 @@
 #include "Panels/Inspector.h"
 #include "Panels/FileExplorer.h"
 #include "Panels/Hierarchy.h"
+#include "Panels/AnimationSequencer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -891,6 +892,11 @@ Workspace::Workspace()
         {
             return std::make_unique<Hierarchy>();
         });
+    registerPanelType("animation_sequencer", "Animation Sequencer",
+        []() -> std::unique_ptr<juce::Component>
+        {
+            return std::make_unique<AnimationSequencer>();
+        });
 
     //==========================================================================
     // Toolbar button.
@@ -1073,6 +1079,9 @@ Workspace::PanelInstance* Workspace::createPanel(const juce::String& typeId, Doc
 
             if (auto* viewport = dynamic_cast<ViewportPanel*>(panel->component.get()))
                 viewport->setTimeline(timelinePanel);
+
+            if (auto* animation = dynamic_cast<AnimationSequencer*>(panel->component.get()))
+                animation->setTimeline(timelinePanel);
         }
     }
     else if (auto* hierarchy = dynamic_cast<Hierarchy*>(component))
@@ -1099,6 +1108,15 @@ Workspace::PanelInstance* Workspace::createPanel(const juce::String& typeId, Doc
             if (auto* availableTimeline = dynamic_cast<Timeline*>((*panel)->component.get()))
             {
                 viewport->setTimeline(availableTimeline);
+                break;
+            }
+    }
+    else if (auto* animation = dynamic_cast<AnimationSequencer*>(component))
+    {
+        for (auto panel = panelInstances.rbegin(); panel != panelInstances.rend(); ++panel)
+            if (auto* availableTimeline = dynamic_cast<Timeline*>((*panel)->component.get()))
+            {
+                animation->setTimeline(availableTimeline);
                 break;
             }
     }
@@ -1192,6 +1210,9 @@ void Workspace::closePanelInstance(int panelId)
 
             if (auto* viewport = dynamic_cast<ViewportPanel*>(panel->component.get()))
                 viewport->setTimeline(replacement);
+
+            if (auto* animation = dynamic_cast<AnimationSequencer*>(panel->component.get()))
+                animation->setTimeline(replacement);
         }
     }
 
@@ -1282,6 +1303,9 @@ void Workspace::resetLayout()
 
         if (auto* viewport = dynamic_cast<ViewportPanel*>(panel->component.get()))
             viewport->setTimeline(nullptr);
+
+        if (auto* animation = dynamic_cast<AnimationSequencer*>(panel->component.get()))
+            animation->setTimeline(nullptr);
     }
 
     panelInstances.clear();
