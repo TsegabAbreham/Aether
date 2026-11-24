@@ -9,10 +9,10 @@ WindowManager::~WindowManager()
     closeAll();
 }
 
-void WindowManager::openSettings()
+void WindowManager::openSettings (juce::AudioDeviceManager* deviceManager)
 {
     if (!settingsWindow)
-        settingsWindow = std::make_unique<SettingsWindow>();
+        settingsWindow = std::make_unique<SettingsWindow> (deviceManager);
 
     settingsWindow->setVisible(true);
     settingsWindow->toFront(true);

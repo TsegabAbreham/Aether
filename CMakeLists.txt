@@ -29,9 +29,8 @@ add_custom_command(TARGET Aether POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon/Aether_Splashscreen.png"
         "$<TARGET_FILE_DIR:Aether>/assets/icon/Aether_Splashscreen.png"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/hrtf/d1.hrir"
-        "$<TARGET_FILE_DIR:Aether>/d1.hrir"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets/hrtf $<TARGET_FILE_DIR:Aether>/assets/hrtf
 )
 
 juce_generate_juce_header(Aether)
@@ -72,6 +71,12 @@ target_sources(Aether PRIVATE
     src/Windows/Window.h
     src/Windows/WindowManager.cpp
     src/Windows/Settings/Setting.cpp
+    src/Windows/Settings/HrirSettingsPage.cpp
+    src/Windows/Settings/SpatialAudioSettingsPage.cpp
+    src/Windows/Settings/AudioDeviceSettingsPage.cpp
+    src/Windows/Settings/ViewportSettingsPage.cpp
+    src/Windows/Settings/TimelineSettingsPage.cpp
+    src/Windows/Settings/GeneralSettingsPage.cpp
     src/Windows/Settings/SettingsManager.cpp
 
 )

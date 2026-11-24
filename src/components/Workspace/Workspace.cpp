@@ -857,6 +857,7 @@ Workspace::Workspace()
           juce::File::userDocumentsDirectory))
 {
     setOpaque(true);
+    audioDeviceManager.initialise (0, 2, nullptr, true);
 
     //==========================================================================
     // Panel types. Add new panel kinds here.
@@ -880,9 +881,9 @@ Workspace::Workspace()
         });
 
     registerPanelType("timeline", "Timeline",
-        []() -> std::unique_ptr<juce::Component>
+        [this]() -> std::unique_ptr<juce::Component>
         {
-            return std::make_unique<Timeline>();
+            return std::make_unique<Timeline>(&audioDeviceManager);
         });
 
     registerPanelType("hierarchy", "Hierarchy",

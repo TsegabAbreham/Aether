@@ -128,6 +128,7 @@ class Workspace : public juce::Component
 public:
     Workspace();
 
+    juce::AudioDeviceManager& getAudioDeviceManager() noexcept { return audioDeviceManager; }
     void setProjectFolder(juce::File folder);
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -231,6 +232,7 @@ private:
     DropOverlay dropOverlay;
     DockPreview dockPreview;
 
+    juce::AudioDeviceManager audioDeviceManager;
     std::vector<PanelType> panelTypes;
     std::vector<std::unique_ptr<PanelInstance>> panelInstances;
     std::vector<DockColumn> columns;

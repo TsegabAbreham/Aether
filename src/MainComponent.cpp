@@ -10,6 +10,11 @@ MainComponent::MainComponent()
         workspace.setProjectFolder(folder);
     };
 
+    menuBar.onAudioDeviceManagerRequested = [this]()
+    {
+        return &workspace.getAudioDeviceManager();
+    };
+
     setSize(800, 600);
 }
 

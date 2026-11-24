@@ -13,7 +13,7 @@ public:
     ~WindowManager();
 
     // Window creation
-    void openSettings();
+    void openSettings (juce::AudioDeviceManager* deviceManager = nullptr);
 
     // Window management
     void closeSettings();

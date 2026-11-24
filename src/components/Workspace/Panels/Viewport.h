@@ -6,7 +6,9 @@
 #include "Panel.h"
 #include "Timeline.h"
 #include "../../../Audio/Object/AudioListener.h"          
+#include "../../../Windows/Settings/SettingsManager.h"
 
+#include <atomic>
 #include <functional>
 #include <string>
 #include <memory>
@@ -14,7 +16,8 @@
 
 class ViewportPanel : public Panel,
                       private juce::OpenGLRenderer,
-                      private juce::Timer
+                      private juce::Timer,
+                      private juce::ChangeListener
 {
 public:
     ViewportPanel();
@@ -172,6 +175,14 @@ private:
 
     void syncScene();
     void setGizmoMode(GizmoMode newMode);
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
+    void applySettings();
+
+    std::atomic<float> fieldOfViewDegrees { 60.0f };
+    std::atomic<float> mouseSensitivity { 0.25f };
+    std::atomic<float> moveSpeed { 5.0f };
+    std::atomic<bool> showGrid { true };
+    std::atomic<bool> invertMouseY { false };
 
     Ray3 makeMouseRay(juce::Point<int> p);
     int  pickAxis(juce::Point<int> p);

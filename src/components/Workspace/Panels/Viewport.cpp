@@ -17,7 +17,6 @@ namespace
     constexpr float kPi = juce::MathConstants<float>::pi;
     constexpr float kObjectRadius = 0.22f;        // visual sphere radius (world units)
     constexpr float kPickRadius   = 0.30f;        // click radius
-    constexpr float kFov          = 55.0f * kPi / 180.0f;
 
     struct Vec3 { float x, y, z; };
 
@@ -173,6 +172,9 @@ ViewportPanel::ViewportPanel()
     openGLContext.setContinuousRepainting(true);
     openGLContext.setComponentPaintingEnabled(true);
 
+    SettingsManager::get().addChangeListener(this);
+    applySettings();
+
     // Focus button.
     addAndMakeVisible(focusCubeButton);
     focusCubeButton.setWantsKeyboardFocus(false);
@@ -242,6 +244,7 @@ ViewportPanel::ViewportPanel()
 
 ViewportPanel::~ViewportPanel()
 {
+    SettingsManager::get().removeChangeListener(this);
     syncTimer.stopTimer();
     syncTimer.onTick = nullptr;
     stopTimer();
@@ -326,6 +329,26 @@ void ViewportPanel::setGizmoMode(GizmoMode newMode)
     moveButton.setToggleState(newMode == GizmoMode::move, juce::dontSendNotification);
     rotateButton.setToggleState(newMode == GizmoMode::rotate, juce::dontSendNotification);
     syncScene();
+}
+
+void ViewportPanel::changeListenerCallback (juce::ChangeBroadcaster* source)
+{
+    juce::ignoreUnused (source);
+    applySettings();
+}
+
+void ViewportPanel::applySettings()
+{
+    auto& settings = SettingsManager::get();
+    fieldOfViewDegrees.store ((float) juce::jlimit (30.0, 110.0,
+                                        settings.getDouble (SettingsManager::Key::ViewportFov)));
+    mouseSensitivity.store ((float) juce::jlimit (0.05, 1.0,
+                                       settings.getDouble (SettingsManager::Key::MouseSensitivity)));
+    moveSpeed.store ((float) juce::jlimit (1.0, 20.0,
+                                settings.getDouble (SettingsManager::Key::MoveSpeed)));
+    showGrid.store (settings.getBool (SettingsManager::Key::ShowGrid));
+    invertMouseY.store (settings.getBool (SettingsManager::Key::InvertMouseY));
+    openGLContext.triggerRepaint();
 }
 
 
@@ -720,7 +743,8 @@ void ViewportPanel::renderOpenGL()
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
     const float nearPlane = 0.1f;
     const float farPlane = 100.0f;
-    const float halfHeight = nearPlane * std::tan(kFov * 0.5f);
+    const float fovRadians = fieldOfViewDegrees.load() * kPi / 180.0f;
+    const float halfHeight = nearPlane * std::tan(fovRadians * 0.5f);
     const float halfWidth = halfHeight * aspect;
 
     const auto projection = juce::Matrix3D<float>::fromFrustum(-halfWidth, halfWidth,
@@ -778,7 +802,8 @@ void ViewportPanel::renderOpenGL()
     tintUniform->set(1.0f, 1.0f, 1.0f);
     emissiveUniform->set(0.0f);
     litUniform->set(0.0f);
-    glDrawArrays(GL_LINES, 0, gridVertexCount);
+    if (showGrid.load())
+        glDrawArrays(GL_LINES, 0, gridVertexCount);
 
     // head model: lit
     if (modelVertexCount > 0)
@@ -892,7 +917,7 @@ ViewportPanel::Ray3 ViewportPanel::makeMouseRay(juce::Point<int> p)
 
     const float ndcX = 2.0f * (float) p.x / w - 1.0f;
     const float ndcY = 1.0f - 2.0f * (float) p.y / h;
-    const float tanHalf = std::tan(kFov * 0.5f);
+    const float tanHalf = std::tan (fieldOfViewDegrees.load() * kPi / 360.0f);
 
     const Vec3 dir = normalize(f + right * (ndcX * tanHalf * (w / h)) + up * (ndcY * tanHalf));
 
@@ -1171,10 +1196,11 @@ void ViewportPanel::mouseDrag(const juce::MouseEvent& event)
     // ORBIT
     if (rightDragging && !event.mods.isShiftDown())
     {
-        const float sensitivity = 0.005f;
+        const float sensitivity = 0.005f * mouseSensitivity.load() / 0.25f;
 
         cameraYaw   += static_cast<float>(delta.x) * sensitivity;
-        cameraPitch -= static_cast<float>(delta.y) * sensitivity;
+        const float verticalDirection = invertMouseY.load() ? 1.0f : -1.0f;
+        cameraPitch += static_cast<float>(delta.y) * sensitivity * verticalDirection;
         cameraPitch = juce::jlimit(-1.5f, 1.5f, cameraPitch);
     }
     // PAN
@@ -1184,7 +1210,8 @@ void ViewportPanel::mouseDrag(const juce::MouseEvent& event)
         const Vec3 right    = normalize(cross(forward, { 0.0f, 1.0f, 0.0f }));
         const Vec3 cameraUp = cross(right, forward);
 
-        const float panSpeed = 2.0f * cameraDistance * std::tan(0.4800f)
+        const float fovRadians = fieldOfViewDegrees.load() * kPi / 180.0f;
+        const float panSpeed = 2.0f * cameraDistance * std::tan(fovRadians * 0.5f)
                                / (float) juce::jmax(1, getHeight());
 
         const Vec3 movement = right    * (-static_cast<float>(delta.x) * panSpeed)
@@ -1286,7 +1313,7 @@ void ViewportPanel::timerCallback()
 
     movement = normalize(movement);
 
-    float speed = juce::jmax(2.0f, cameraDistance * 0.8f);
+    float speed = moveSpeed.load();
 
     if (juce::ModifierKeys::getCurrentModifiers().isShiftDown())
         speed *= 3.0f;

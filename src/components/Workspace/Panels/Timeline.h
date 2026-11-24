@@ -46,13 +46,14 @@ namespace TimelineTheme
 //   - mouse wheel = scroll, Shift+wheel = horizontal scroll, Ctrl+wheel = zoom
 //
 // Spatialisation: every clip is rendered through its own BinauralPanner (BinauralPanner.h)
-// or, when d1.hrir is loaded, through measured HRIRs. The clip's position relative to the
+// or, when an HRIR file is loaded, through measured HRIRs. The clip's position relative to the
 // fixed AudioListener is turned into angles by SpatialMath::getSourceAngles(). The angles are
 // recomputed every audio block and the renderers ramp their parameters, so moving a clip is
 // heard immediately, no clicks.
 //
 // HRIR: the constructor calls loadDefaultHrir(), which looks for d1.hrir next to the
-// executable (the CMake post-build step copies it there).
+// executable (the CMake post-build step copies it there). The Settings window can switch
+// profiles later by calling loadDefaultHrir("h3.hrir") and so on.
 //
 // Hierarchy / Inspector talk to the timeline through the public "audio object" API below.
 // Playback is self-contained. Pass your AudioDeviceManager to share it, or pass nothing
@@ -229,44 +230,66 @@ public:
     // HRIR rendering (message thread)
     //==========================================================================
 
-    // Looks for d1.hrir next to the executable (where CMake copies it), then a few fallbacks.
-    // Call after the audio device is open so the database is resampled to the real device rate.
+    // Looks for the file next to the executable (or in assets/hrtf) and loads it.
+    // Returns true if the HRIR is now active. On failure the previous HRIR stays active.
     bool loadDefaultHrir(const juce::String& fileName = "d1.hrir")
     {
         const auto exeDir = juce::File::getSpecialLocation(juce::File::currentApplicationFile)
                                 .getParentDirectory();
+        const auto cwd = juce::File::getCurrentWorkingDirectory();
 
         const juce::File candidates[]
         {
             exeDir.getChildFile(fileName),
             exeDir.getChildFile("assets/hrtf").getChildFile(fileName),
-            juce::File::getCurrentWorkingDirectory().getChildFile(fileName),
-            juce::File::getCurrentWorkingDirectory().getChildFile("assets/hrtf").getChildFile(fileName)
+            cwd.getChildFile(fileName),
+            cwd.getChildFile("assets/hrtf").getChildFile(fileName)
         };
 
         for (auto& f : candidates)
         {
-            if (f.existsAsFile())
-            {
-                if (loadHrirFile(f))
-                {
-                    DBG("HRIR loaded: " << f.getFullPathName());
-                    return true;
-                }
+            if (! f.existsAsFile())
+                continue;
 
-                DBG("HRIR found but failed to load: " << f.getFullPathName());
-                return false;
+            if (loadHrirFile(f))
+            {
+                DBG("HRIR loaded: " << f.getFullPathName());
+                return true;
             }
+
+            // The previous HRIR stays active when a load fails.
+            DBG("HRIR found but failed to load: " << f.getFullPathName());
+            return false;
         }
 
-        DBG("HRIR not found. Looked next to the exe: " << exeDir.getFullPathName());
+        DBG("HRIR not found: " << fileName << " (looked next to the exe: "
+            << exeDir.getFullPathName() << ")");
         return false;
     }
 
-    // Loads the .hrir file made by the Colab converter, resamples it to the device rate (a fraction
-    // of a second) and starts using it. Until this succeeds the simple binaural model is used.
-    bool loadHrirFile(const juce::File& file)
+    // Loads a .hrir file made by the Colab converter, resamples it to the device rate and
+    // starts using it. Call from the message thread. If it fails, the current HRIR (or the
+    // simple binaural model) keeps playing.
+    //
+    // 'force' = reload even if this file is already active (used after a sample-rate change).
+    bool loadHrirFile(const juce::File& file, bool force = false)
     {
+        const double sr = deviceSR.load();
+
+        if (sr <= 0.0)
+        {
+            DBG("HRIR load skipped: audio device is not running yet");
+            return false;
+        }
+
+        // Already using this file, nothing to do (avoids clicks from a pointless reset)
+        {
+            const juce::ScopedLock sl(lock);
+
+            if (! force && hrirDb != nullptr && hrirFile == file && ! hrirReloadPending.load())
+                return true;
+        }
+
         auto db = std::make_shared<HrirDatabase>();
         juce::String err;
 
@@ -276,14 +299,15 @@ public:
             return false;
         }
 
-        const double sr = deviceSR.load();
-
         db->azimuthSign = hrirAzimuthSign;
         db->prepare(sr);                                // resample outside the lock
+
+        std::shared_ptr<HrirDatabase> previous;         // freed after the lock is released
 
         {
             const juce::ScopedLock sl(lock);
 
+            previous = std::move(hrirDb);
             hrirDb   = db;
             hrirFile = file;
 
@@ -297,7 +321,7 @@ public:
         }
 
         hrirReloadPending.store(false);
-        return true;
+        return true;                                    // 'previous' is destroyed here, outside the lock
     }
 
     bool isHrirLoaded() const             { return hrirDb != nullptr; }
@@ -1432,8 +1456,10 @@ private:
 
     void timerCallback() override
     {
+        // The device sample rate changed: re-resample the HRIR for the new rate.
+        // 'force' is required, otherwise loadHrirFile() would see the same file and skip the reload.
         if (hrirReloadPending.exchange(false) && hrirFile.existsAsFile())
-            loadHrirFile(hrirFile);                       // re-resample for the new device rate
+            loadHrirFile(hrirFile, true);
 
         const bool nowPlaying = playing.load();
 

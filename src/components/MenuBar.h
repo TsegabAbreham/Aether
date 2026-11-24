@@ -139,6 +139,7 @@ class MenuBar : public juce::Component,
 {
 public:
     std::function<void(juce::File)> onFolderSelected;
+    std::function<juce::AudioDeviceManager*()> onAudioDeviceManagerRequested;
 
     MenuBar()
     {
@@ -210,7 +211,11 @@ public:
         {
             // File
             case 2: openFolder(); break;
-            case 4: windowManager.openSettings(); break;
+            case 4:
+                windowManager.openSettings (onAudioDeviceManagerRequested
+                                                ? onAudioDeviceManagerRequested()
+                                                : nullptr);
+                break;
             case 5: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
             
             // View
