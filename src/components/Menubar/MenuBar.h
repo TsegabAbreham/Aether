@@ -3,6 +3,8 @@
 
 #include "../Workspace/Workspace.h"
 #include "../../Windows/WindowManager.h"
+#include "ProjectManager.h"
+
 
 //==============================================================================
 namespace Theme
@@ -140,6 +142,10 @@ class MenuBar : public juce::Component,
 public:
     std::function<void(juce::File)> onFolderSelected;
     std::function<juce::AudioDeviceManager*()> onAudioDeviceManagerRequested;
+    std::function<AetherState()> onProjectStateRequested;
+    std::function<void(const AetherState&, const juce::File&)> onProjectSaved;
+    std::function<bool()> onProjectDirtyCheck;
+    std::function<bool(const AetherState&, juce::String&)> onProjectLoaded;
 
     MenuBar()
     {
@@ -179,10 +185,11 @@ public:
             addMenuItem(menu, 2, "Open Folder...", "Ctrl+O");
             menu.addSeparator();
             addMenuItem(menu, 3, "Save",           "Ctrl+S");
+            addMenuItem(menu, 4, "Open",           "Ctrl+Alt+O");
             menu.addSeparator();
-            addMenuItem(menu, 4, "Settings",    "Ctrl+Alt+S");
+            addMenuItem(menu, 5, "Settings",    "Ctrl+Alt+S");
             menu.addSeparator();
-            addMenuItem(menu, 5, "Exit",           "Alt+F4");
+            addMenuItem(menu, 6, "Exit",           "Alt+F4");
         }
         else if (menuName == "Edit")
         {
@@ -209,70 +216,61 @@ public:
     {
         switch (menuItemID)
         {
-            // File
+            // ----------------------
+            // ----- File Option ----
+            // ----------------------
             case 2: openFolder(); break;
-            /*
-            case 3:
-            {
-                juce::AlertWindow::showOkCancelBox(
-                    juce::MessageBoxIconType::QuestionIcon,
-                    "Save Project?",
-                    "Do you want to save your project?",
-                    "Save",
-                    "Cancel",
-                    nullptr,
-                    juce::ModalCallbackFunction::create(
-                        [this](int result)
+            
+            case 3: chooseAndSaveProject(false); break;
+            
+            case 4:
+                {
+                    auto chooser = std::make_shared<juce::FileChooser>(
+                        "Open Aether Project",
+                        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+                        "*.atr");
+
+                    chooser->launchAsync(
+                        juce::FileBrowserComponent::openMode |
+                        juce::FileBrowserComponent::canSelectFiles,
+                        [this, chooser](const juce::FileChooser& fc)
                         {
-                            if (result != 1)
+                            auto projectFile = fc.getResult();
+
+                            if (projectFile == juce::File())
                                 return;
 
-                            auto chooser = std::make_shared<juce::FileChooser>(
-                                "Save Aether Project",
-                                juce::File::getSpecialLocation(
-                                    juce::File::userDocumentsDirectory)
-                                    .getChildFile("Untitled.atr"),
-                                "*.atr"
-                            );
+                            ProjectManager projectManager;
+                            AetherState state;
+                            juce::String error;
 
-                            chooser->launchAsync(
-                                juce::FileBrowserComponent::saveMode |
-                                juce::FileBrowserComponent::canSelectFiles,
-                                [this, chooser](const juce::FileChooser& fc)
-                                {
-                                    auto projectFile = fc.getResult();
+                            if (projectManager.loadProject(projectFile, state, &error))
+                            {
+                                if (onProjectLoaded && ! onProjectLoaded(state, error))
+                                    juce::AlertWindow::showMessageBoxAsync(
+                                        juce::MessageBoxIconType::WarningIcon,
+                                        "Open Failed",
+                                        error.isNotEmpty() ? error : "Could not restore this project.");
+                            }
+                            else
+                            {
+                                juce::AlertWindow::showMessageBoxAsync(
+                                    juce::MessageBoxIconType::WarningIcon,
+                                    "Open Failed",
+                                    error);
+                            }
+                        });
 
-                                    if (projectFile == juce::File())
-                                        return;
-
-                                    if (!projectFile.hasFileExtension("atr"))
-                                        projectFile = projectFile.withFileExtension("atr");
-
-                                    ProjectManager projectManager;
-
-                                    if (projectManager.saveProject(projectFile))
-                                        DBG("Project saved successfully!");
-                                    else
-                                        DBG("Failed to save project!");
-                                }
-                            );
-                        }
-                    )
-                );
-
-                break;
-            }
-            */
-            case 4:
+                    break;
+                }
+            
+            case 5:
                 windowManager.openSettings (onAudioDeviceManagerRequested
                                                 ? onAudioDeviceManagerRequested()
                                                 : nullptr);
                 break;
-            case 5: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
+            case 6: requestQuit(); break;
             
-            // View
-
-            // Help
 
             default: break;
         }
@@ -290,6 +288,112 @@ private:
         item.itemID = id;
         item.shortcutKeyDescription = shortcut;
         m.addItem(item);
+    }
+
+    void chooseAndSaveProject(bool quitAfterSave)
+    {
+        if (! onProjectStateRequested)
+        {
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::MessageBoxIconType::WarningIcon,
+                "Save Failed",
+                "The project state is not available.");
+            return;
+        }
+
+        const auto state = onProjectStateRequested();
+        if (! state.projectFilePath.empty())
+        {
+            auto projectFile = juce::File(juce::String(state.projectFilePath));
+            if (projectFile.hasFileExtension(".atr"))
+            {
+                if (saveProjectToFile(projectFile) && quitAfterSave)
+                    juce::JUCEApplication::getInstance()->systemRequestedQuit();
+                return;
+            }
+        }
+
+        juce::File startFolder = state.explorer.rootFolder.isDirectory()
+            ? state.explorer.rootFolder
+            : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+        auto chooser = std::make_shared<juce::FileChooser>(
+            "Save Aether Project",
+            startFolder.getChildFile("Untitled.atr"),
+            "*.atr");
+        juce::Component::SafePointer<MenuBar> safe(this);
+
+        chooser->launchAsync(
+            juce::FileBrowserComponent::saveMode |
+            juce::FileBrowserComponent::canSelectFiles |
+            juce::FileBrowserComponent::warnAboutOverwriting,
+            [safe, chooser, quitAfterSave](const juce::FileChooser& fc)
+            {
+                if (safe == nullptr)
+                    return;
+
+                auto projectFile = fc.getResult();
+                if (projectFile == juce::File())
+                    return;
+
+                if (! projectFile.hasFileExtension(".atr"))
+                    projectFile = projectFile.withFileExtension("atr");
+
+                if (safe->saveProjectToFile(projectFile) && quitAfterSave)
+                    juce::JUCEApplication::getInstance()->systemRequestedQuit();
+            });
+    }
+
+    bool saveProjectToFile(const juce::File& projectFile)
+    {
+        if (! onProjectStateRequested)
+            return false;
+
+        auto state = onProjectStateRequested();
+        state.projectName = projectFile.getFileNameWithoutExtension().toStdString();
+        state.projectFilePath = projectFile.getFullPathName().toStdString();
+
+        ProjectManager projectManager;
+        if (! projectManager.saveProject(projectFile, state))
+        {
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::MessageBoxIconType::WarningIcon,
+                "Save Failed",
+                "Could not write " + projectFile.getFullPathName());
+            return false;
+        }
+
+        if (onProjectSaved)
+            onProjectSaved(state, projectFile);
+        return true;
+    }
+
+    void requestQuit()
+    {
+        if (! onProjectDirtyCheck || ! onProjectDirtyCheck())
+        {
+            juce::JUCEApplication::getInstance()->systemRequestedQuit();
+            return;
+        }
+
+        juce::Component::SafePointer<MenuBar> safe(this);
+        juce::AlertWindow::showYesNoCancelBox(
+            juce::MessageBoxIconType::QuestionIcon,
+            "Unsaved Changes",
+            "Save changes to this project before exiting?",
+            "Save",
+            "Don't Save",
+            "Cancel",
+            this,
+            juce::ModalCallbackFunction::create(
+                [safe](int result)
+                {
+                    if (safe == nullptr)
+                        return;
+                    if (result == 1)
+                        safe->chooseAndSaveProject(true);
+                    else if (result == 2)
+                        juce::JUCEApplication::getInstance()->systemRequestedQuit();
+                }));
     }
 
     void openFolder()

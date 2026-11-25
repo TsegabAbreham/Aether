@@ -40,6 +40,7 @@ add_custom_command(TARGET Aether POST_BUILD
 juce_generate_juce_header(Aether)
 
 target_sources(Aether PRIVATE
+    src/AetherState.h
     src/Main.cpp
     src/MainComponent.cpp
     src/MainComponent.h
@@ -50,6 +51,8 @@ target_sources(Aether PRIVATE
     src/components/knob.h
 
     src/components/MenuBar/MenuBar.h
+    src/components/MenuBar/ProjectManager.cpp
+    src/components/MenuBar/ProjectManager.h
 
     src/components/Helper_functions/obj_loader.cpp
 
@@ -101,6 +104,10 @@ target_link_libraries(Aether PRIVATE
     juce::juce_recommended_warning_flags
     juce::juce_opengl
     glm::glm
+)
+
+target_include_directories(Aether PRIVATE
+    ${CMAKE_SOURCE_DIR}/external/json
 )
 
 if (MSVC)

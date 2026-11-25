@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "../../../AetherState.h"
 #include "Timeline.h"
 
 //==============================================================================
@@ -19,7 +20,8 @@ class Hierarchy : public juce::Component,
                   private juce::Label::Listener
 {
 public:
-    Hierarchy()
+    explicit Hierarchy(AetherState::HierarchyState& state)
+        : projectState(state)
     {
         list.setModel(this);
         list.setRowHeight(rowH);
@@ -232,9 +234,15 @@ private:
             return;
 
         if (juce::isPositiveAndBelow(lastRow, (int) items.size()))
+        {
             timeline->selectObject(items[(size_t) lastRow]);
+            projectState.selectedObjectId = items[(size_t) lastRow]->id.toString().toStdString();
+        }
         else
+        {
             timeline->selectObject(nullptr);
+            projectState.selectedObjectId.clear();
+        }
     }
 
     void deleteKeyPressed(int lastRow) override
@@ -312,6 +320,10 @@ private:
     {
         items = timeline != nullptr ? timeline->getAudioObjects()
                                     : std::vector<AudioObject::Ptr> {};
+        projectState.objectIds.clear();
+        projectState.objectIds.reserve(items.size());
+        for (const auto& item : items)
+            projectState.objectIds.push_back(item->id.toString().toStdString());
 
         syncing = true;
         list.updateContent();
@@ -326,6 +338,9 @@ private:
     {
         const auto sel = timeline != nullptr ? timeline->getSelectedObject()
                                              : AudioObject::Ptr {};
+        projectState.selectedObjectId = sel != nullptr
+            ? sel->id.toString().toStdString()
+            : std::string();
         int idx = -1;
 
         for (int i = 0; i < (int) items.size(); ++i)
@@ -343,6 +358,7 @@ private:
     }
 
     //==========================================================================
+    AetherState::HierarchyState& projectState;
     Timeline* timeline = nullptr;
     std::vector<AudioObject::Ptr> items;
     AudioObject::Ptr renaming;

@@ -1,6 +1,6 @@
 #pragma once
-
 #include <JuceHeader.h>
+#include "../../../AetherState.h"
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -44,8 +44,9 @@ public:
     std::function<void(juce::File)> onDirectoryChanged;  // user navigated to another folder inside the root
 
     //==========================================================================
-    explicit FileExplorer(juce::File initialFolder = {})
-        : Panel("File Explorer")
+    explicit FileExplorer(AetherState::ExplorerState& state, juce::File initialFolder = {})
+        : Panel("File Explorer"),
+          explorerState(state)
     {
         viewport.setViewedComponent(&grid, false);
         viewport.setScrollBarsShown(true, false);
@@ -68,14 +69,14 @@ public:
         refreshButton.onClick    = [this] { refreshItems(); };
 
         iconSlider.setRange(56.0, 144.0, 1.0);
-        iconSlider.setValue((double) iconSize, juce::dontSendNotification);
+        iconSlider.setValue((double) explorerState.iconSize, juce::dontSendNotification);
         iconSlider.setColour(juce::Slider::thumbColourId, ExplorerTheme::accent);
         iconSlider.setColour(juce::Slider::trackColourId, ExplorerTheme::accent.withAlpha(0.35f));
         iconSlider.setColour(juce::Slider::backgroundColourId, ExplorerTheme::border);
         iconSlider.setTooltip("Icon size (Ctrl + mouse wheel)");
         iconSlider.onValueChange = [this]
         {
-            iconSize = (int) iconSlider.getValue();
+            explorerState.iconSize = (int) iconSlider.getValue();
             grid.relayout();
             grid.repaint();
         };
@@ -106,9 +107,9 @@ public:
         if (! folder.isDirectory())
             return;
 
-        rootFolder    = folder;
-        currentFolder = folder;
-        selectedFile  = juce::File();
+        explorerState.rootFolder    = folder;
+        explorerState.currentFolder = folder;
+        explorerState.selectedFile  = juce::File();
 
         refreshItems();
         viewport.setViewPosition(0, 0);
@@ -116,12 +117,33 @@ public:
     }
 
     // The project root (what the user picked with "Open Folder")
-    juce::File getCurrentFolder() const { return rootFolder; }
+    juce::File getCurrentFolder() const { return explorerState.rootFolder; }
 
     // The folder currently being displayed in the grid
-    juce::File getBrowsedFolder() const { return currentFolder; }
+    juce::File getBrowsedFolder() const { return explorerState.currentFolder; }
 
-    juce::File getSelectedFile() const  { return selectedFile; }
+    juce::File getSelectedFile() const  { return explorerState.selectedFile; }
+
+    void restoreFromProjectState()
+    {
+        if (! explorerState.rootFolder.isDirectory())
+        {
+            explorerState.currentFolder = juce::File();
+            explorerState.selectedFile = juce::File();
+        }
+        else if (! explorerState.currentFolder.isDirectory()
+                 || ! isInsideRoot(explorerState.currentFolder))
+        {
+            explorerState.currentFolder = explorerState.rootFolder;
+            explorerState.selectedFile = juce::File();
+        }
+
+        explorerState.iconSize = juce::jlimit(56, 144, explorerState.iconSize);
+        iconSlider.setValue(explorerState.iconSize, juce::dontSendNotification);
+        refreshItems();
+        viewport.setViewPosition(0, 0);
+        updateLayoutState();
+    }
 
     // Navigate to a folder inside the root
     void navigateTo(const juce::File& dir)
@@ -129,20 +151,20 @@ public:
         if (! dir.isDirectory() || ! isInsideRoot(dir))
             return;
 
-        currentFolder = dir;
-        selectedFile  = juce::File();
+        explorerState.currentFolder = dir;
+        explorerState.selectedFile  = juce::File();
 
         refreshItems();
         viewport.setViewPosition(0, 0);
 
         if (onDirectoryChanged)
-            onDirectoryChanged(currentFolder);
+            onDirectoryChanged(explorerState.currentFolder);
     }
 
     void goUp()
     {
-        if (currentFolder != rootFolder)
-            navigateTo(currentFolder.getParentDirectory());
+        if (explorerState.currentFolder != explorerState.rootFolder)
+            navigateTo(explorerState.currentFolder.getParentDirectory());
     }
 
     //==========================================================================
@@ -163,7 +185,7 @@ public:
                    juce::Rectangle<int>(12, 0, juce::jmax(0, titleMaxRight - 12), headerHeight),
                    juce::Justification::centredLeft, true);
 
-        if (rootFolder.isDirectory())
+        if (explorerState.rootFolder.isDirectory())
         {
             // ---- footer
             auto footer = juce::Rectangle<int>(0, getHeight() - footerHeight, getWidth(), footerHeight);
@@ -174,8 +196,8 @@ public:
 
             juce::String info = juce::String((int) items.size()) + (items.size() == 1 ? " item" : " items");
 
-            if (selectedFile != juce::File())
-                info << "   |   " << selectedFile.getFileName();
+            if (explorerState.selectedFile != juce::File())
+                info << "   |   " << explorerState.selectedFile.getFileName();
 
             g.setColour(ExplorerTheme::textDim);
             g.setFont(juce::Font(juce::FontOptions(11.5f)));
@@ -213,7 +235,7 @@ public:
 
         titleMaxRight = header.getRight();
 
-        if (rootFolder.isDirectory())
+        if (explorerState.rootFolder.isDirectory())
         {
             breadcrumbs.setBounds(area.removeFromTop(crumbHeight));
 
@@ -356,8 +378,8 @@ private:
             crumbs.clear();
             hovered = -1;
 
-            const auto root = owner.rootFolder;
-            const auto cur  = owner.currentFolder;
+            const auto root = owner.explorerState.rootFolder;
+            const auto cur  = owner.explorerState.currentFolder;
 
             if (! root.isDirectory())
             {
@@ -531,8 +553,8 @@ private:
         int columns      = 1;
         int hoveredIndex = -1;
 
-        int cellW() const { return owner.iconSize + 28; }
-        int cellH() const { return owner.iconSize + 58; }
+        int cellW() const { return owner.explorerState.iconSize + 28; }
+        int cellH() const { return owner.explorerState.iconSize + 58; }
 
         void relayout()
         {
@@ -624,7 +646,7 @@ private:
             const auto& it = owner.items[(size_t) idx];
             const auto inner = tileBounds(idx).reduced(3).toFloat();
 
-            const bool selected = (it.file == owner.selectedFile);
+            const bool selected = (it.file == owner.explorerState.selectedFile);
             const bool hovered  = (idx == hoveredIndex);
 
             if (selected)
@@ -640,7 +662,7 @@ private:
                 g.fillRoundedRectangle(inner, 6.0f);
             }
 
-            const float s = (float) owner.iconSize;
+            const float s = (float) owner.explorerState.iconSize;
             auto iconRect = juce::Rectangle<float>(s, s).withCentre({ inner.getCentreX(),
                                                                       inner.getY() + 8.0f + s * 0.5f });
 
@@ -722,7 +744,7 @@ private:
             if (n == 0)
                 return false;
 
-            const int sel = owner.indexOf(owner.selectedFile);
+            const int sel = owner.indexOf(owner.explorerState.selectedFile);
 
             if (key == juce::KeyPress::returnKey)
             {
@@ -770,11 +792,7 @@ private:
 
     std::vector<Item> items;
 
-    juce::File rootFolder;      // project root picked with "Open Folder"
-    juce::File currentFolder;   // folder being shown in the grid
-    juce::File selectedFile;
-
-    int iconSize      = 84;
+    AetherState::ExplorerState& explorerState;
     int titleMaxRight = 100;
 
     //==========================================================================
@@ -782,7 +800,7 @@ private:
     //==========================================================================
     void updateLayoutState()
     {
-        const bool hasFolder = rootFolder.isDirectory();
+        const bool hasFolder = explorerState.rootFolder.isDirectory();
 
         viewport.setVisible(hasFolder);
         breadcrumbs.setVisible(hasFolder);
@@ -799,15 +817,16 @@ private:
 
     bool isInsideRoot(const juce::File& f) const
     {
-        return rootFolder.isDirectory() && (f == rootFolder || f.isAChildOf(rootFolder));
+        return explorerState.rootFolder.isDirectory()
+            && (f == explorerState.rootFolder || f.isAChildOf(explorerState.rootFolder));
     }
 
     void chooseFolder()
     {
         chooser = std::make_unique<juce::FileChooser>(
             "Select Project Folder",
-            rootFolder.isDirectory()
-                ? rootFolder
+            explorerState.rootFolder.isDirectory()
+                ? explorerState.rootFolder
                 : juce::File::getSpecialLocation(juce::File::userHomeDirectory));
 
         juce::Component::SafePointer<FileExplorer> safe(this);
@@ -837,15 +856,16 @@ private:
     void refreshItems()
     {
         // if the browsed folder vanished, climb up to the nearest one that exists
-        while (currentFolder != rootFolder && ! currentFolder.isDirectory())
-            currentFolder = currentFolder.getParentDirectory();
+        while (explorerState.currentFolder != explorerState.rootFolder
+               && ! explorerState.currentFolder.isDirectory())
+            explorerState.currentFolder = explorerState.currentFolder.getParentDirectory();
 
         items.clear();
         grid.hoveredIndex = -1;
 
-        if (currentFolder.isDirectory())
+        if (explorerState.currentFolder.isDirectory())
         {
-            auto children = currentFolder.findChildFiles(
+            auto children = explorerState.currentFolder.findChildFiles(
                 juce::File::findFilesAndDirectories | juce::File::ignoreHiddenFiles, false);
 
             items.reserve((size_t) children.size());
@@ -866,10 +886,10 @@ private:
             });
         }
 
-        if (indexOf(selectedFile) < 0)
-            selectedFile = juce::File();
+        if (indexOf(explorerState.selectedFile) < 0)
+            explorerState.selectedFile = juce::File();
 
-        upButton.setEnabled(currentFolder != rootFolder);
+        upButton.setEnabled(explorerState.currentFolder != explorerState.rootFolder);
 
         grid.relayout();
         grid.repaint();
@@ -908,7 +928,7 @@ private:
         if (! juce::isPositiveAndBelow(index, (int) items.size()))
             return;
 
-        selectedFile = items[(size_t) index].file;
+        explorerState.selectedFile = items[(size_t) index].file;
 
         if (scroll)
             scrollToIndex(index);
@@ -917,12 +937,12 @@ private:
         repaint();
 
         if (onFileSelected)
-            onFileSelected(selectedFile);
+            onFileSelected(explorerState.selectedFile);
     }
 
     void clearSelection()
     {
-        selectedFile = juce::File();
+        explorerState.selectedFile = juce::File();
         grid.repaint();
         repaint();
     }
@@ -976,7 +996,7 @@ private:
     //==========================================================================
     void showContextMenu()
     {
-        const bool hasSelection = selectedFile.exists();
+        const bool hasSelection = explorerState.selectedFile.exists();
 
         juce::PopupMenu m;
         m.addItem(7, "Open", hasSelection);
@@ -1003,9 +1023,11 @@ private:
                 case 2: safe->createFolder();   break;
                 case 3: safe->renameSelected(); break;
                 case 4: safe->deleteSelected(); break;
-                case 5: (safe->selectedFile.exists() ? safe->selectedFile : safe->currentFolder).revealToUser(); break;
+                case 5: (safe->explorerState.selectedFile.exists()
+                             ? safe->explorerState.selectedFile
+                             : safe->explorerState.currentFolder).revealToUser(); break;
                 case 6: safe->refreshItems();   break;
-                case 7: safe->activateIndex(safe->indexOf(safe->selectedFile)); break;
+                case 7: safe->activateIndex(safe->indexOf(safe->explorerState.selectedFile)); break;
                 default: break;
             }
         });
@@ -1054,14 +1076,14 @@ private:
     // new items are always created in the folder currently shown
     void selectAndReveal(const juce::File& f)
     {
-        selectedFile = f;
+        explorerState.selectedFile = f;
         refreshItems();
         scrollToIndex(indexOf(f));
     }
 
     void createFolder()
     {
-        const auto target = currentFolder;
+        const auto target = explorerState.currentFolder;
 
         if (! target.isDirectory())
             return;
@@ -1078,14 +1100,14 @@ private:
             if (folder.exists())
                 return;
 
-            if (folder.createDirectory().wasOk() && safe->currentFolder == target)
+            if (folder.createDirectory().wasOk() && safe->explorerState.currentFolder == target)
                 safe->selectAndReveal(folder);
         });
     }
 
     void createFile()
     {
-        const auto target = currentFolder;
+        const auto target = explorerState.currentFolder;
 
         if (! target.isDirectory())
             return;
@@ -1102,17 +1124,17 @@ private:
             if (file.exists())
                 return;
 
-            if (file.create().wasOk() && safe->currentFolder == target)
+            if (file.create().wasOk() && safe->explorerState.currentFolder == target)
                 safe->selectAndReveal(file);
         });
     }
 
     void renameSelected()
     {
-        if (! selectedFile.exists())
+        if (! explorerState.selectedFile.exists())
             return;
 
-        const auto original = selectedFile;
+        const auto original = explorerState.selectedFile;
 
         juce::Component::SafePointer<FileExplorer> safe(this);
 
@@ -1133,10 +1155,10 @@ private:
 
     void deleteSelected()
     {
-        if (! selectedFile.exists())
+        if (! explorerState.selectedFile.exists())
             return;
 
-        const auto fileToDelete = selectedFile;
+        const auto fileToDelete = explorerState.selectedFile;
 
         auto* alert = new juce::AlertWindow(
             "Delete",
@@ -1158,7 +1180,7 @@ private:
 
                     if (fileToDelete.moveToTrash())
                     {
-                        safeThis->selectedFile = juce::File();
+                        safeThis->explorerState.selectedFile = juce::File();
                         safeThis->refreshItems();
                     }
                 }),

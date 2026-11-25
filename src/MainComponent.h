@@ -9,6 +9,8 @@
 
 #include "Audio/core/AudioEngine.h"
 
+#include <string>
+
 class MainComponent : public juce::Component
 {
 public:
@@ -22,6 +24,7 @@ private:
     MenuBar menuBar;
     Workspace workspace;
     AudioEngine audioEngine;
+    std::string savedStateSnapshot;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

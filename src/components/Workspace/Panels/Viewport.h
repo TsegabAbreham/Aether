@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include <glm/glm.hpp>
 
+#include "../../../AetherState.h"
 #include "Panel.h"
 #include "Timeline.h"
 #include "../../../Audio/Object/AudioListener.h"          
@@ -20,7 +21,7 @@ class ViewportPanel : public Panel,
                       private juce::ChangeListener
 {
 public:
-    ViewportPanel();
+    explicit ViewportPanel(AetherState::ViewportState& state);
     ~ViewportPanel() override;
 
     // Call once from the parent:  viewport.setTimeline(&timeline);
@@ -43,6 +44,10 @@ public:
     bool keyPressed(const juce::KeyPress& key) override;
 
     bool load_obj(const std::string& filepath, glm::vec3 position);
+
+    using CameraState = AetherState::CameraState;
+
+    CameraState getCameraState() const;
 
 private:
 
@@ -105,13 +110,7 @@ private:
     // ORBIT CAMERA
     //==========================================================
 
-    float pivotX = 0.0f;
-    float pivotY = 0.0f;
-    float pivotZ = 0.0f;
-
-    float cameraYaw = 0.0f;
-    float cameraPitch = -0.18f;
-    float cameraDistance = 8.0f;
+    AetherState::ViewportState& viewportState;
 
     juce::CriticalSection cameraLock;
 

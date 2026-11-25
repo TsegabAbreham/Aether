@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "../../AetherState.h"
 
 #include <functional>
 #include <memory>
@@ -129,6 +130,9 @@ public:
     Workspace();
 
     juce::AudioDeviceManager& getAudioDeviceManager() noexcept { return audioDeviceManager; }
+    AetherState& getProjectState() noexcept { return projectState; }
+    AetherState captureProjectState();
+    bool loadProjectState(const AetherState& state, juce::String& errorMessage);
     void setProjectFolder(juce::File folder);
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -228,6 +232,7 @@ private:
     void applyPanelDrop(int panelId, DockArea* source, DropTarget target);
 
     juce::File projectFolder;
+    AetherState projectState;
     juce::TextButton panelsButton { "Panels +" };
     DropOverlay dropOverlay;
     DockPreview dockPreview;

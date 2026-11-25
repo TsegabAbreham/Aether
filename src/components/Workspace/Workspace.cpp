@@ -56,7 +56,7 @@ namespace StartupConfig
     std::vector<StartupPanel> getPanels()
     {
         return {
-            { "left_dock",   "hiery" },
+            { "left_dock",   "file_explorer" },
             { "center_dock", "viewport"      },
             { "right_dock",  "hierarchy"     },
             { "bottom_dock", "timeline"      },
@@ -859,6 +859,8 @@ Workspace::Workspace()
 {
     setOpaque(true);
     audioDeviceManager.initialise (0, 2, nullptr, true);
+    projectState.explorer.rootFolder = projectFolder;
+    projectState.explorer.currentFolder = projectFolder;
 
     //==========================================================================
     // Panel types. Add new panel kinds here.
@@ -866,13 +868,13 @@ Workspace::Workspace()
     registerPanelType("file_explorer", "File Explorer",
         [this]() -> std::unique_ptr<juce::Component>
         {
-            return std::make_unique<FileExplorer>(projectFolder);
+            return std::make_unique<FileExplorer>(projectState.explorer, projectFolder);
         });
 
     registerPanelType("viewport", "Viewport",
-        []() -> std::unique_ptr<juce::Component>
+        [this]() -> std::unique_ptr<juce::Component>
         {
-            return std::make_unique<ViewportPanel>();
+            return std::make_unique<ViewportPanel>(projectState.viewport);
         });
 
     registerPanelType("inspector", "Inspector",
@@ -884,18 +886,18 @@ Workspace::Workspace()
     registerPanelType("timeline", "Timeline",
         [this]() -> std::unique_ptr<juce::Component>
         {
-            return std::make_unique<Timeline>(&audioDeviceManager);
+            return std::make_unique<Timeline>(projectState.timeline, &audioDeviceManager);
         });
 
     registerPanelType("hierarchy", "Hierarchy",
-        []() -> std::unique_ptr<juce::Component>
+        [this]() -> std::unique_ptr<juce::Component>
         {
-            return std::make_unique<Hierarchy>();
+            return std::make_unique<Hierarchy>(projectState.hierarchy);
         });
     registerPanelType("animation_sequencer", "Animation Sequencer",
-        []() -> std::unique_ptr<juce::Component>
+        [this]() -> std::unique_ptr<juce::Component>
         {
-            return std::make_unique<AnimationSequencer>();
+            return std::make_unique<AnimationSequencer>(projectState.animation);
         });
 
     //==========================================================================
@@ -930,11 +932,86 @@ void Workspace::setProjectFolder(juce::File folder)
 {
     projectFolder = folder;
 
+    if (folder.isDirectory())
+    {
+        projectState.explorer.rootFolder = folder;
+        projectState.explorer.currentFolder = folder;
+        projectState.explorer.selectedFile = juce::File();
+    }
+
     for (auto& instance : panelInstances)
     {
         if (auto* explorer = dynamic_cast<FileExplorer*>(instance->component.get()))
             explorer->setRootFolder(folder);
     }
+}
+
+AetherState Workspace::captureProjectState()
+{
+    layoutDocks();
+
+    for (const auto& instance : panelInstances)
+        if (auto* timeline = dynamic_cast<Timeline*>(instance->component.get()))
+            timeline->captureProjectState();
+
+    return projectState;
+}
+
+bool Workspace::loadProjectState(const AetherState& state, juce::String& errorMessage)
+{
+    const auto previousState = projectState;
+    projectState = state;
+
+    Timeline* timeline = nullptr;
+    FileExplorer* explorer = nullptr;
+
+    for (const auto& instance : panelInstances)
+    {
+        if (auto* candidate = dynamic_cast<Timeline*>(instance->component.get()))
+            timeline = candidate;
+        if (auto* candidate = dynamic_cast<FileExplorer*>(instance->component.get()))
+            explorer = candidate;
+    }
+
+    if (timeline != nullptr
+        && ! timeline->restoreProjectState(projectState.hierarchy.selectedObjectId, errorMessage))
+    {
+        projectState = previousState;
+        return false;
+    }
+
+    if (projectState.explorer.rootFolder.isDirectory())
+        projectFolder = projectState.explorer.rootFolder;
+
+    if (explorer != nullptr)
+        explorer->restoreFromProjectState();
+
+    for (const auto& savedDock : projectState.workspace.docks)
+    {
+        if (auto* dock = findDockById(juce::String(savedDock.id)))
+        {
+            int columnIndex = -1;
+            int slotIndex = -1;
+            if (locateDock(dock, columnIndex, slotIndex))
+            {
+                columns[static_cast<size_t>(columnIndex)].size = savedDock.width;
+                columns[static_cast<size_t>(columnIndex)].slots[static_cast<size_t>(slotIndex)].size = savedDock.height;
+            }
+
+            for (const auto& instance : panelInstances)
+            {
+                if (std::to_string(instance->id) == savedDock.activePanelId
+                    && dock->containsPanel(instance->component.get()))
+                {
+                    dock->setActivePanel(instance->component.get());
+                    break;
+                }
+            }
+        }
+    }
+
+    layoutDocks();
+    return true;
 }
 
 
@@ -1720,6 +1797,62 @@ void Workspace::layoutDocks()
                 x, content.getY(), splitterThickness, content.getHeight());
 
             x += splitterThickness;
+        }
+    }
+
+    projectState.workspace.docks.clear();
+    projectState.workspace.panels.clear();
+
+    for (int c = 0; c < columnCount; ++c)
+    {
+        const auto& column = columns[static_cast<size_t>(c)];
+
+        for (int s = 0; s < static_cast<int>(column.slots.size()); ++s)
+        {
+            const auto& slot = column.slots[static_cast<size_t>(s)];
+            AetherState::DockLayoutState dockState;
+            dockState.id = slot.area->getDockId().toStdString();
+            dockState.column = c;
+            dockState.row = s;
+            dockState.width = column.size;
+            dockState.height = slot.size;
+
+            if (auto* active = slot.area->getActivePanel())
+            {
+                if (const auto* activeInstance = findInstance(active))
+                    dockState.activePanelId = std::to_string(activeInstance->id);
+            }
+
+            for (const auto& instance : panelInstances)
+            {
+                auto* component = instance->component.get();
+                if (! slot.area->containsPanel(component))
+                    continue;
+
+                const auto panelId = std::to_string(instance->id);
+                dockState.panelIds.push_back(panelId);
+
+                const auto bounds = getPanelBoundsInWorkspace(component);
+                const auto dockBounds = slot.area->getBounds();
+                AetherState::PanelLayoutState panelState;
+                panelState.id = panelId;
+                panelState.type = instance->typeId.toStdString();
+                panelState.name = instance->name.toStdString();
+                panelState.dockId = dockState.id;
+                panelState.x = getWidth() > 0 ? (float) bounds.getX() / (float) getWidth() : 0.0f;
+                panelState.y = getHeight() > 0 ? (float) bounds.getY() / (float) getHeight() : 0.0f;
+                panelState.width = getWidth() > 0 ? (float) bounds.getWidth() / (float) getWidth() : 0.0f;
+                panelState.height = getHeight() > 0 ? (float) bounds.getHeight() / (float) getHeight() : 0.0f;
+                panelState.scaleX = dockBounds.getWidth() > 0
+                    ? (float) bounds.getWidth() / (float) dockBounds.getWidth()
+                    : 1.0f;
+                panelState.scaleY = dockBounds.getHeight() > 0
+                    ? (float) bounds.getHeight() / (float) dockBounds.getHeight()
+                    : 1.0f;
+                projectState.workspace.panels.push_back(std::move(panelState));
+            }
+
+            projectState.workspace.docks.push_back(std::move(dockState));
         }
     }
 }

@@ -8,7 +8,7 @@
 #include <vector>
 #include <glm/glm.hpp>
 
-
+#include "../../../AetherState.h"
 #include "../../../Audio/Object/AudioObject.h"
 #include "../../../Audio/Spatialization/SpatialMath.h"
 #include "../../../Audio/Spatialization/HrirDatabase.h"
@@ -81,7 +81,13 @@ public:
     std::function<void(const AudioObject&)> onTransformChanged;   // position or rotation changed
 
     //==========================================================================
-    explicit Timeline(juce::AudioDeviceManager* sharedDeviceManager = nullptr)
+    explicit Timeline(
+        AetherState::TimelineState& state,
+        juce::AudioDeviceManager* sharedDeviceManager = nullptr)
+        : projectState(state),
+          pps(state.pixelsPerSecond),
+          viewStart(state.viewStartSeconds),
+          scrollY(state.verticalScroll)
     {
         formatManager.registerBasicFormats();
 
@@ -197,6 +203,7 @@ public:
             tracks.push_back(std::move(t));
         }
 
+        syncProjectState();
         updateScrollBars();
         repaint();
         return (int) tracks.size() - 1;
@@ -226,11 +233,18 @@ public:
 
     void setPlayheadSeconds(double seconds)
     {
-        playSample.store((juce::int64) (juce::jmax(0.0, seconds) * deviceSR.load()));
+        const auto clampedSeconds = juce::jmax(0.0, seconds);
+        playSample.store((juce::int64) (clampedSeconds * deviceSR.load()));
+        projectState.playheadSeconds = clampedSeconds;
         repaintPlayhead();
     }
 
-    double getPlayheadSeconds() const     { return (double) playSample.load() / deviceSR.load(); }
+    double getPlayheadSeconds() const
+    {
+        const auto seconds = (double) playSample.load() / deviceSR.load();
+        projectState.playheadSeconds = seconds;
+        return seconds;
+    }
 
     static int getHeaderWidth() { return headerW; }
     double getPixelsPerSecond() const { return pps; }
@@ -254,8 +268,92 @@ public:
     }
 
     // global amount of distance-based room reverb: 0 = off, 1 = default, up to 2 = very wet
-    void setRoomAmount(float amount)      { roomAmount.store(juce::jlimit(0.0f, 2.0f, amount)); }
+    void setRoomAmount(float amount)
+    {
+        const auto clampedAmount = juce::jlimit(0.0f, 2.0f, amount);
+        roomAmount.store(clampedAmount);
+        projectState.roomAmount = clampedAmount;
+    }
     float getRoomAmount() const           { return roomAmount.load(); }
+
+    void captureProjectState()
+    {
+        projectState.playheadSeconds = getPlayheadSeconds();
+        projectState.roomAmount = getRoomAmount();
+        syncProjectState();
+    }
+
+    bool restoreProjectState(
+        const std::string& selectedObjectId,
+        juce::String& errorMessage)
+    {
+        std::vector<std::unique_ptr<Track>> restoredTracks;
+        restoredTracks.reserve(projectState.tracks.size());
+        int restoredTrackCounter = 0;
+        Ptr restoredSelection;
+
+        for (const auto& savedTrack : projectState.tracks)
+        {
+            auto track = std::make_unique<Track>();
+            if (! savedTrack.id.empty())
+                track->id = juce::Uuid(juce::String(savedTrack.id));
+
+            ++restoredTrackCounter;
+            track->name = savedTrack.name.empty()
+                ? "Track " + juce::String(restoredTrackCounter)
+                : juce::String(savedTrack.name);
+            track->colour = juce::Colour(savedTrack.colourArgb);
+            track->mute.store(savedTrack.muted);
+            track->solo.store(savedTrack.solo);
+
+            for (const auto& savedClip : savedTrack.clips)
+            {
+                if (! savedClip.file.existsAsFile())
+                {
+                    errorMessage = "Audio file is missing: " + savedClip.file.getFullPathName();
+                    return false;
+                }
+
+                auto clip = createClip(savedClip.file);
+                if (clip == nullptr)
+                {
+                    errorMessage = "Could not load audio file: " + savedClip.file.getFullPathName();
+                    return false;
+                }
+
+                static_cast<AetherState::AudioClipState&>(*clip) = savedClip;
+                clip->setReverbSampleRate(deviceSR.load());
+                clip->panner.prepare(deviceSR.load());
+                clip->hrir.setDatabase(hrirDb.get(), deviceSR.load());
+                clip->updateReverbParams();
+
+                if (clip->id.toString().toStdString() == selectedObjectId)
+                    restoredSelection = clip;
+
+                track->clips.push_back(std::move(clip));
+            }
+
+            restoredTracks.push_back(std::move(track));
+        }
+
+        {
+            const juce::ScopedLock sl(lock);
+            tracks = std::move(restoredTracks);
+        }
+
+        trackCounter = restoredTrackCounter;
+        playing.store(false);
+        selectedClip.reset();
+        setRoomAmount(projectState.roomAmount);
+        setView(projectState.viewStartSeconds, projectState.pixelsPerSecond);
+        scrollY = projectState.verticalScroll;
+        updateScrollBars();
+        setPlayheadSeconds(projectState.playheadSeconds);
+        setSelected(restoredSelection);
+        notifyListChanged();
+        repaint();
+        return true;
+    }
 
     //==========================================================================
     // HRIR rendering (message thread)
@@ -1052,6 +1150,7 @@ private:
     //==========================================================================
     struct Track
     {
+        juce::Uuid id;
         juce::String name;
         juce::Colour colour;
         std::atomic<bool> mute { false };
@@ -1077,8 +1176,45 @@ private:
     //==========================================================================
     // Notification helpers
     //==========================================================================
-    void notifyListChanged()               { listBroadcaster.sendChangeMessage(); }
-    void objectEdited(const AudioObject& o) { if (onObjectChanged) onObjectChanged(o); }
+    void notifyListChanged()
+    {
+        syncProjectState();
+        listBroadcaster.sendChangeMessage();
+    }
+
+    void objectEdited(const AudioObject& o)
+    {
+        syncProjectState();
+        if (onObjectChanged)
+            onObjectChanged(o);
+    }
+
+    void syncProjectState()
+    {
+        const juce::ScopedLock sl(lock);
+        projectState.tracks.clear();
+        projectState.tracks.reserve(tracks.size());
+
+        for (const auto& sourceTrack : tracks)
+        {
+            AetherState::AudioTrackState trackState;
+            trackState.id = sourceTrack->id.toString().toStdString();
+            trackState.name = sourceTrack->name.toStdString();
+            trackState.colourArgb = sourceTrack->colour.getARGB();
+            trackState.muted = sourceTrack->mute.load();
+            trackState.solo = sourceTrack->solo.load();
+            trackState.clips.reserve(sourceTrack->clips.size());
+            trackState.objectIds.reserve(sourceTrack->clips.size());
+
+            for (const auto& clip : sourceTrack->clips)
+            {
+                trackState.clips.push_back(static_cast<const AetherState::AudioClipState&>(*clip));
+                trackState.objectIds.push_back(clip->id.toString().toStdString());
+            }
+
+            projectState.tracks.push_back(std::move(trackState));
+        }
+    }
 
     void setSelected(const Ptr& p)
     {
@@ -1780,6 +1916,11 @@ private:
     //==========================================================================
     // Members (declaration order matters for destruction)
     //==========================================================================
+    AetherState::TimelineState& projectState;
+    double& pps;
+    double& viewStart;
+    int& scrollY;
+
     juce::AudioFormatManager   formatManager;
     juce::AudioThumbnailCache  thumbCache { 32 };
     juce::CriticalSection      lock;
@@ -1813,10 +1954,7 @@ private:
     juce::ScrollBar hBar { false }, vBar { true };
     juce::Rectangle<int> timeRect;
 
-    double pps       = 60.0;     // pixels per second
-    double viewStart = 0.0;      // seconds at the left edge of the lanes
     std::atomic<double> animationEndSeconds { 0.0 };
-    int    scrollY   = 0;
 
     DragMode dragMode = DragMode::none;
     Ptr dragClip, selectedClip;
@@ -1830,7 +1968,7 @@ private:
     bool   lastPlaying = false;
     double lastPaintedTime = -1.0;
     int    lastPlayheadX = 0;
-    int    trackCounter = 0;
+    int trackCounter = 0;
     juce::int64 thumbCounter = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Timeline)

@@ -6,6 +6,8 @@
 #include <map>
 #include <memory>
 #include <vector>
+
+#include "../../../AetherState.h"
 #include "Timeline.h"
 
 //==============================================================================
@@ -52,7 +54,11 @@ public:
     std::function<void()> onKeysChanged;
 
     //==========================================================================
-    AnimationSequencer()
+    explicit AnimationSequencer(AetherState::AnimationState& state)
+        : animationState(state),
+          tracks(state.tracks),
+          nextKeyId(state.nextKeyId),
+          recording(state.recording)
     {
         for (auto* b : { &toStartButton, &playButton, &stopButton, &recordButton, &addKeyButton, &delKeyButton })
             addAndMakeVisible(b);
@@ -433,20 +439,9 @@ private:
     //==========================================================================
     // Small types
     //==========================================================================
-    struct Vec3f { float x = 0.0f, y = 0.0f, z = 0.0f; };
-
-    struct Key
-    {
-        int    id       = 0;
-        double time     = 0.0;
-        Vec3f  pos;
-        bool   recorded = false;      // created by the recorder (eligible for simplification)
-    };
-
-    struct ObjectTrack
-    {
-        std::vector<Key> keys;        // always sorted by time
-    };
+    using Vec3f = AetherState::Vector3;
+    using Key = AetherState::KeyframeState;
+    using ObjectTrack = AetherState::ObjectAnimationState;
 
     enum class DragMode { none, scrub, key };
 
@@ -1448,11 +1443,13 @@ private:
     //==========================================================================
     // Members
     //==========================================================================
+    AetherState::AnimationState& animationState;
+    std::map<juce::Uuid, ObjectTrack>& tracks;
+    int& nextKeyId;
+    bool& recording;
+
     Timeline* timeline = nullptr;
     std::vector<AudioObject::Ptr> objects;               // lane order = Timeline order
-
-    std::map<juce::Uuid, ObjectTrack> tracks;            // keyframes per audio object
-    int nextKeyId = 1;
 
     // view (mirrors the Timeline's)
     double pps       = 60.0;
@@ -1466,7 +1463,6 @@ private:
     double     dragGrabOffset = 0.0;
 
     // recording
-    bool             recording = false;
     AudioObject::Ptr recObj;
     Vec3f            lastRec;
     double           lastChangeTime = 0.0;

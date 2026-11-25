@@ -162,8 +162,9 @@ namespace
 // CONSTRUCTOR
 //==============================================================
 
-ViewportPanel::ViewportPanel()
-    : Panel("3D VIEWPORT")
+ViewportPanel::ViewportPanel(AetherState::ViewportState& state)
+    : Panel("3D VIEWPORT"),
+      viewportState(state)
 {
     openGLContext.setPreferredVersion({ 3, 2 });
     openGLContext.setPreferredProfile(juce::OpenGLProfile::core);
@@ -656,12 +657,13 @@ void ViewportPanel::createSceneBuffers()
 
 juce::Matrix3D<float> ViewportPanel::createViewMatrix() const
 {
-    const Vec3 forward  = getForward(cameraYaw, cameraPitch);
+    const auto& camera = viewportState.camera;
+    const Vec3 forward  = getForward(camera.yaw, camera.pitch);
     const Vec3 worldUp  = { 0.0f, 1.0f, 0.0f };
     const Vec3 right    = normalize(cross(forward, worldUp));
     const Vec3 cameraUp = cross(right, forward);
 
-    const Vec3 eye = Vec3{ pivotX, pivotY, pivotZ } - forward * cameraDistance;
+    const Vec3 eye = Vec3{ camera.pivotX, camera.pivotY, camera.pivotZ } - forward * camera.distance;
 
     const float values[16] =
     {
@@ -678,12 +680,7 @@ void ViewportPanel::resetCamera()
 {
     {
         const juce::ScopedLock lock(cameraLock);
-        pivotX = 0.0f;
-        pivotY = 0.0f;
-        pivotZ = 0.0f;
-        cameraYaw = 0.0f;
-        cameraPitch = -0.18f;
-        cameraDistance = 8.0f;
+        viewportState.camera = {};
     }
 
     openGLContext.triggerRepaint();
@@ -700,12 +697,26 @@ void ViewportPanel::focusSelectedObject()
 
     {
         const juce::ScopedLock lock(cameraLock);
-        pivotX = (float) sel->position.x;
-        pivotY = (float) sel->position.y;
-        pivotZ = (float) sel->position.z;
+        viewportState.camera.pivotX = (float) sel->position.x;
+        viewportState.camera.pivotY = (float) sel->position.y;
+        viewportState.camera.pivotZ = (float) sel->position.z;
     }
 
     openGLContext.triggerRepaint();
+}
+
+ViewportPanel::CameraState ViewportPanel::getCameraState() const // Retriving camera information
+{
+    const juce::ScopedLock lock(cameraLock);
+
+    return {
+        viewportState.camera.pivotX,
+        viewportState.camera.pivotY,
+        viewportState.camera.pivotZ,
+        viewportState.camera.yaw,
+        viewportState.camera.pitch,
+        viewportState.camera.distance
+    };
 }
 
 //==============================================================
@@ -758,10 +769,11 @@ void ViewportPanel::renderOpenGL()
         const juce::ScopedLock lock(cameraLock);
         view = createViewMatrix();
 
-        const Vec3 f = getForward(cameraYaw, cameraPitch);
-        eye = { pivotX - f.x * cameraDistance,
-                pivotY - f.y * cameraDistance,
-                pivotZ - f.z * cameraDistance };
+        const auto& camera = viewportState.camera;
+        const Vec3 f = getForward(camera.yaw, camera.pitch);
+        eye = { camera.pivotX - f.x * camera.distance,
+                camera.pivotY - f.y * camera.distance,
+                camera.pivotZ - f.z * camera.distance };
     }
 
     const auto viewProj = projection * view;
@@ -902,8 +914,12 @@ ViewportPanel::Ray3 ViewportPanel::makeMouseRay(juce::Point<int> p)
 
     {
         const juce::ScopedLock lock(cameraLock);
-        yaw = cameraYaw; pitch = cameraPitch; dist = cameraDistance;
-        px = pivotX; py = pivotY; pz = pivotZ;
+        yaw = viewportState.camera.yaw;
+        pitch = viewportState.camera.pitch;
+        dist = viewportState.camera.distance;
+        px = viewportState.camera.pivotX;
+        py = viewportState.camera.pivotY;
+        pz = viewportState.camera.pivotZ;
     }
 
     const Vec3 f     = getForward(yaw, pitch);
@@ -1197,28 +1213,28 @@ void ViewportPanel::mouseDrag(const juce::MouseEvent& event)
     {
         const float sensitivity = 0.005f * mouseSensitivity.load() / 0.25f;
 
-        cameraYaw   += static_cast<float>(delta.x) * sensitivity;
+        viewportState.camera.yaw += static_cast<float>(delta.x) * sensitivity;
         const float verticalDirection = invertMouseY.load() ? 1.0f : -1.0f;
-        cameraPitch += static_cast<float>(delta.y) * sensitivity * verticalDirection;
-        cameraPitch = juce::jlimit(-1.5f, 1.5f, cameraPitch);
+        viewportState.camera.pitch += static_cast<float>(delta.y) * sensitivity * verticalDirection;
+        viewportState.camera.pitch = juce::jlimit(-1.5f, 1.5f, viewportState.camera.pitch);
     }
     // PAN
     else
     {
-        const Vec3 forward  = getForward(cameraYaw, cameraPitch);
+        const Vec3 forward  = getForward(viewportState.camera.yaw, viewportState.camera.pitch);
         const Vec3 right    = normalize(cross(forward, { 0.0f, 1.0f, 0.0f }));
         const Vec3 cameraUp = cross(right, forward);
 
         const float fovRadians = fieldOfViewDegrees.load() * kPi / 180.0f;
-        const float panSpeed = 2.0f * cameraDistance * std::tan(fovRadians * 0.5f)
+        const float panSpeed = 2.0f * viewportState.camera.distance * std::tan(fovRadians * 0.5f)
                                / (float) juce::jmax(1, getHeight());
 
         const Vec3 movement = right    * (-static_cast<float>(delta.x) * panSpeed)
                             + cameraUp * ( static_cast<float>(delta.y) * panSpeed);
 
-        pivotX += movement.x;
-        pivotY += movement.y;
-        pivotZ += movement.z;
+        viewportState.camera.pivotX += movement.x;
+        viewportState.camera.pivotY += movement.y;
+        viewportState.camera.pivotZ += movement.z;
     }
 
     openGLContext.triggerRepaint();
@@ -1231,8 +1247,8 @@ void ViewportPanel::mouseWheelMove(const juce::MouseEvent& event, const juce::Mo
     const juce::ScopedLock lock(cameraLock);
 
     const float zoomFactor = std::exp(-wheel.deltaY * 0.4f);
-    cameraDistance *= zoomFactor;
-    cameraDistance = juce::jlimit(0.5f, 100.0f, cameraDistance);
+    viewportState.camera.distance *= zoomFactor;
+    viewportState.camera.distance = juce::jlimit(0.5f, 100.0f, viewportState.camera.distance);
 
     openGLContext.triggerRepaint();
 }
@@ -1298,8 +1314,8 @@ void ViewportPanel::timerCallback()
 
     const juce::ScopedLock lock(cameraLock);
 
-    const Vec3 forward = { std::sin(cameraYaw), 0.0f, -std::cos(cameraYaw) };
-    const Vec3 right   = { std::cos(cameraYaw), 0.0f,  std::sin(cameraYaw) };
+    const Vec3 forward = { std::sin(viewportState.camera.yaw), 0.0f, -std::cos(viewportState.camera.yaw) };
+    const Vec3 right   = { std::cos(viewportState.camera.yaw), 0.0f,  std::sin(viewportState.camera.yaw) };
 
     Vec3 movement = { 0.0f, 0.0f, 0.0f };
 
@@ -1319,9 +1335,9 @@ void ViewportPanel::timerCallback()
 
     const Vec3 step = movement * (speed * dt);
 
-    pivotX += step.x;
-    pivotY += step.y;
-    pivotZ += step.z;
+    viewportState.camera.pivotX += step.x;
+    viewportState.camera.pivotY += step.y;
+    viewportState.camera.pivotZ += step.z;
 
     openGLContext.triggerRepaint();
 }
