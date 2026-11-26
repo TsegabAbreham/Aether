@@ -132,6 +132,7 @@ public:
     juce::AudioDeviceManager& getAudioDeviceManager() noexcept { return audioDeviceManager; }
     AetherState& getProjectState() noexcept { return projectState; }
     AetherState captureProjectState();
+    bool exportAudio(const juce::File& file, juce::String& errorMessage);
     bool loadProjectState(const AetherState& state, juce::String& errorMessage);
     void setProjectFolder(juce::File folder);
     void paint(juce::Graphics& g) override;

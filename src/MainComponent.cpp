@@ -20,6 +20,11 @@ MainComponent::MainComponent()
         return workspace.captureProjectState();
     };
 
+    menuBar.onAudioExportRequested = [this](const juce::File& file, juce::String& error)
+    {
+        return workspace.exportAudio(file, error);
+    };
+
     menuBar.onProjectDirtyCheck = [this]()
     {
         return ProjectManager::toJson(workspace.captureProjectState()).dump() != savedStateSnapshot;

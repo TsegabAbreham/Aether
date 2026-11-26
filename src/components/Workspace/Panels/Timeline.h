@@ -283,6 +283,160 @@ public:
         syncProjectState();
     }
 
+    bool exportAudio(const juce::File& file,
+                     const AetherState::AnimationState& animation,
+                     juce::String& errorMessage)
+    {
+        auto* format = formatManager.findFormatForFileExtension(file.getFileExtension());
+        if (format == nullptr)
+        {
+            errorMessage = "Unsupported audio format. Choose a format supported by JUCE, such as WAV or AIFF.";
+            return false;
+        }
+
+        if (! format->canDoStereo())
+        {
+            errorMessage = format->getFormatName() + " does not support stereo audio.";
+            return false;
+        }
+
+        const double sampleRate = deviceSR.load();
+        const auto bitDepths = format->getPossibleBitDepths();
+        if (bitDepths.isEmpty())
+        {
+            errorMessage = format->getFormatName() + " does not support audio export.";
+            return false;
+        }
+
+        const int bitDepth = bitDepths.contains(24) ? 24 : bitDepths.getLast();
+        juce::AudioFormatWriterOptions writerOptions;
+        writerOptions = writerOptions.withSampleRate(sampleRate)
+                                     .withNumChannels(2)
+                                     .withBitsPerSample(bitDepth);
+
+        auto outputStream = file.createOutputStream();
+        if (outputStream == nullptr)
+        {
+            errorMessage = "Could not create " + file.getFullPathName();
+            return false;
+        }
+
+        std::unique_ptr<juce::OutputStream> stream(std::move(outputStream));
+        auto writer = format->createWriterFor(stream, writerOptions);
+        if (writer == nullptr)
+        {
+            errorMessage = "Could not create an audio writer for " + file.getFullPathName();
+            return false;
+        }
+
+        std::map<juce::Uuid, std::vector<AetherState::KeyframeState>> animationTracks;
+        double durationSeconds = 0.0;
+        {
+            const juce::ScopedLock sl(lock);
+            durationSeconds = getProjectEnd();
+            for (const auto& track : animation.tracks)
+            {
+                auto keys = track.second.keys;
+                std::stable_sort(keys.begin(), keys.end(),
+                                 [](const auto& a, const auto& b) { return a.time < b.time; });
+                if (! keys.empty())
+                    durationSeconds = juce::jmax(durationSeconds, keys.back().time);
+                animationTracks.emplace(track.first, std::move(keys));
+            }
+        }
+
+        const juce::int64 totalSamples = (juce::int64) std::ceil(durationSeconds * sampleRate);
+        if (totalSamples <= 0)
+        {
+            errorMessage = "There is no timeline audio or animation to export.";
+            return false;
+        }
+
+        const bool wasPlaying = playing.exchange(false);
+        const juce::int64 originalPlaySample = playSample.load();
+        std::vector<std::pair<Ptr, glm::vec3>> originalPositions;
+
+        deviceManager->removeAudioCallback(&player);
+        {
+            const juce::ScopedLock sl(lock);
+            for (auto& track : tracks)
+                for (auto& clip : track->clips)
+                {
+                    originalPositions.emplace_back(
+                        clip, glm::vec3(clip->position.x, clip->position.y, clip->position.z));
+                    clip->lastEndSample = -1;
+                    clip->reverb.reset();
+                    clip->panner.reset();
+                    clip->hrir.reset();
+                }
+        }
+
+        constexpr int blockSize = 512;
+        juce::AudioBuffer<float> block(2, blockSize);
+        bool writeSucceeded = true;
+
+        for (juce::int64 startSample = 0; startSample < totalSamples; startSample += blockSize)
+        {
+            const double time = (double) startSample / sampleRate;
+            {
+                const juce::ScopedLock sl(lock);
+                for (auto& track : tracks)
+                    for (auto& clip : track->clips)
+                    {
+                        const auto keys = animationTracks.find(clip->id);
+                        if (keys == animationTracks.end() || keys->second.empty())
+                            continue;
+
+                        glm::vec3 position;
+                        if (sampleAnimationPosition(keys->second, time, position))
+                        {
+                            clip->position.x = position.x;
+                            clip->position.y = position.y;
+                            clip->position.z = position.z;
+                        }
+                    }
+            }
+
+            const int samplesThisBlock = (int) juce::jmin<juce::int64>(
+                blockSize, totalSamples - startSample);
+            playSample.store(startSample);
+            playing.store(true);
+            juce::AudioSourceChannelInfo info(&block, 0, samplesThisBlock);
+            getNextAudioBlock(info);
+
+            if (! writer->writeFromAudioSampleBuffer(block, 0, samplesThisBlock))
+            {
+                errorMessage = "Failed while writing " + file.getFullPathName();
+                writeSucceeded = false;
+                break;
+            }
+        }
+
+        writer.reset();
+
+        {
+            const juce::ScopedLock sl(lock);
+            for (const auto& original : originalPositions)
+            {
+                original.first->position = original.second;
+                original.first->lastEndSample = -1;
+                original.first->reverb.reset();
+                original.first->panner.reset();
+                original.first->hrir.reset();
+            }
+        }
+
+        playSample.store(originalPlaySample);
+        projectState.playheadSeconds = (double) originalPlaySample / sampleRate;
+        deviceManager->addAudioCallback(&player);
+        playing.store(wasPlaying);
+
+        if (writeSucceeded)
+            errorMessage.clear();
+
+        return writeSucceeded;
+    }
+
     bool restoreProjectState(
         const std::string& selectedObjectId,
         juce::String& errorMessage)
@@ -1157,6 +1311,37 @@ private:
         std::atomic<bool> solo { false };
         std::vector<Ptr> clips;
     };
+
+    static bool sampleAnimationPosition(
+        const std::vector<AetherState::KeyframeState>& keys,
+        double time,
+        glm::vec3& position)
+    {
+        if (keys.empty())
+            return false;
+
+        if (time <= keys.front().time)
+        {
+            position = keys.front().pos;
+            return true;
+        }
+
+        if (time >= keys.back().time)
+        {
+            position = keys.back().pos;
+            return true;
+        }
+
+        const auto next = std::upper_bound(
+            keys.begin(), keys.end(), time,
+            [](double value, const AetherState::KeyframeState& key) { return value < key.time; });
+        const auto& right = *next;
+        const auto& left = *(next - 1);
+        const double span = right.time - left.time;
+        const float amount = span > 1.0e-9 ? (float) ((time - left.time) / span) : 1.0f;
+        position = left.pos + (right.pos - left.pos) * amount;
+        return true;
+    }
 
     enum class DragMode { none, scrub, clip };
 

@@ -146,6 +146,7 @@ public:
     std::function<void(const AetherState&, const juce::File&)> onProjectSaved;
     std::function<bool()> onProjectDirtyCheck;
     std::function<bool(const AetherState&, juce::String&)> onProjectLoaded;
+    std::function<bool(const juce::File&, juce::String&)> onAudioExportRequested;
 
     MenuBar()
     {
@@ -186,6 +187,8 @@ public:
             menu.addSeparator();
             addMenuItem(menu, 3, "Save",           "Ctrl+S");
             addMenuItem(menu, 4, "Open",           "Ctrl+Alt+O");
+            menu.addSeparator();
+            addMenuItem(menu, 7, "Export as...");
             menu.addSeparator();
             addMenuItem(menu, 5, "Settings",    "Ctrl+Alt+S");
             menu.addSeparator();
@@ -269,6 +272,49 @@ public:
                                                 ? onAudioDeviceManagerRequested()
                                                 : nullptr);
                 break;
+            case 7:
+                {
+                    auto chooser = std::make_shared<juce::FileChooser>(
+                        "Export Final Audio",
+                        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                            .getChildFile("Aether Export.wav"),
+                        "*.wav;*.aiff;*.aif");
+                    juce::Component::SafePointer<MenuBar> safe(this);
+
+                    chooser->launchAsync(
+                        juce::FileBrowserComponent::saveMode |
+                        juce::FileBrowserComponent::canSelectFiles |
+                        juce::FileBrowserComponent::warnAboutOverwriting,
+                        [safe, chooser](const juce::FileChooser& fc)
+                        {
+                            if (safe == nullptr)
+                                return;
+
+                            auto destination = fc.getResult();
+                            if (destination == juce::File())
+                                return;
+
+                            if (destination.getFileExtension().isEmpty())
+                                destination = destination.withFileExtension("wav");
+
+                            juce::String error;
+                            if (! safe->onAudioExportRequested
+                                || ! safe->onAudioExportRequested(destination, error))
+                            {
+                                juce::AlertWindow::showMessageBoxAsync(
+                                    juce::MessageBoxIconType::WarningIcon,
+                                    "Export Failed",
+                                    error.isNotEmpty() ? error : "Audio export is unavailable.");
+                                return;
+                            }
+
+                            juce::AlertWindow::showMessageBoxAsync(
+                                juce::MessageBoxIconType::InfoIcon,
+                                "Audio Exported",
+                                "Final audio saved to:\n" + destination.getFullPathName());
+                        });
+                    break;
+                }
             case 6: requestQuit(); break;
             
 

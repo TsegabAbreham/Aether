@@ -957,6 +957,16 @@ AetherState Workspace::captureProjectState()
     return projectState;
 }
 
+bool Workspace::exportAudio(const juce::File& file, juce::String& errorMessage)
+{
+    for (const auto& instance : panelInstances)
+        if (auto* timeline = dynamic_cast<Timeline*>(instance->component.get()))
+            return timeline->exportAudio(file, projectState.animation, errorMessage);
+
+    errorMessage = "The timeline panel is unavailable.";
+    return false;
+}
+
 bool Workspace::loadProjectState(const AetherState& state, juce::String& errorMessage)
 {
     const auto previousState = projectState;
